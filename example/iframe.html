@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en" ng-app="app" ng-controller="AppCtrl as AppCtrl">
+<head>
+    <meta charset="UTF-8">
+    <title>Iframe Window</title>
+    <script src="//cdn.jsdelivr.net/angularjs/1.2.5/angular.min.js"></script>
+    <script src="../src/ui-amp.js"></script>
+    <script src="js/iframe.js"></script>
+</head>
+<body>
+    <h1>{{AppCtrl.hello}}</h1>
+    <button ng-click="AppCtrl.getData()">Get Data!</button>
+    <div ng-if="AppCtrl.data.length > 0">{{AppCtrl.data | json}}</div>
+</body>
+</html>
