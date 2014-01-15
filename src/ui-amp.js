@@ -1,14 +1,49 @@
 (function () {
     var module = angular.module('ui-amp', []);
 
+    module.constant('ErrorObjects', {
+        PARSE_ERROR: {
+            code: -32700,
+            message: 'Parse error',
+            data: {}
+        },
+        INVALID_REQUEST: {
+            code: -32600,
+            message: 'Invalid request',
+            data: {}
+        },
+        METHOD_NOT_FOUND: {
+            code: -32601,
+            message: 'Method not found',
+            data: {}
+        },
+        INVALID_PARAMS: {
+            code: -32602,
+            message: 'Invalid params',
+            data: {}
+        },
+        INTERNAL_ERROR: {
+            code: -32603,
+            message: 'Internal error',
+            data: {}
+        },
+        REQUEST_ERROR: {
+            code: -32100,
+            message: '',
+            data: {}
+        }
+    });
     module.provider('$amp', function () {
         var targetWindow,
+            jsonrpcVersion = '2.0',
             targetOrigin = '*',
+            allowedOrigins = [],
             scope = '',
             subscriptions = [],
             pendingPromises = {},
             currentId = 1,
             postMessage = function (message) {
+                message['jsonrpc'] = jsonrpcVersion;
                 message = angular.toJson(message);
                 if (scope) {
                     message = scope + ':' + message;
@@ -52,12 +87,25 @@
             targetOrigin = _targetOrigin;
         };
 
+        this.setAllowedOrigins = function (_allowedOrigins) {
+            if (typeof _allowedOrigins === 'string') {
+                _allowedOrigins = [_allowedOrigins];
+            }
+
+            allowedOrigins = _allowedOrigins;
+        };
+
         this.setScope = function (_scope) {
             scope = _scope;
         };
 
-        this.$get = function ($rootScope, $window, $q) {
+        this.$get = function ($rootScope, $window, $q, ErrorObjects) {
             $window.addEventListener('message', function (event) {
+                // If allowedOrigins is specified, check to make sure it's legit
+                if (allowedOrigins.length > 0 && allowedOrigins.indexOf(event.origin) === -1) {
+                    return;
+                }
+
                 // We are only concerned about messages that are strings
                 if (typeof event.data !== 'string') {
                     return;
@@ -70,45 +118,61 @@
 
                 var requestString = event.data.substr(scope.length + (scope ? 1 : 0)),
                     request = angular.fromJson(requestString),
-                    subs = getSubsToCall(request.method);
+                    subs = getSubsToCall(request.method),
+                    subsIndex = -1,
+                    subsCount = subs.length;
 
                 /**
-                 * If no subs and the request has an ID, it means we should
-                 * send back a "Method not found" error response
+                 * If no subs were found and the request has an ID,
+                 * it means we should send back a "Method not found" error response
                  */
-                if (subs.length === 0 && typeof request.id !== 'undefined') {
+                if (subsCount === 0 && typeof request.id !== 'undefined') {
+                    var error = ErrorObjects.METHOD_NOT_FOUND;
+                    error.data.request = request;
+
                     postMessage({
-                        error: {
-                            code: -32601,
-                            message: 'Method not found'
-                        },
+                        error: error,
                         method: 'amp.error',
                         id: request.id
                     });
                 }
 
-                angular.forEach(subs, function (sub) {
-                    $rootScope.$apply(function () {
-                        var reply = sub.callback(request);
+                while (++subsIndex < subsCount) {
+                    var sub = subs[subsIndex],
+                        reply = sub.callback(request);
 
-                        if (
-                            typeof request.id === 'undefined' ||
-                            request.method === 'amp.reply' ||
-                            request.method === 'amp.error' ||
-                            ! sub.atomic
-                        ) {
-                            return;
-                        }
+                    /**
+                     * Check to see if we need to post a response/error message
+                     */
+                    // @TODO - Figure out a better way to do this...icky!
+                    if (
+                        typeof request.id === 'undefined' ||
+                        request.method === 'amp.response' ||
+                        request.method === 'amp.error' ||
+                        ! sub.atomic
+                    ) {
+                        continue;
+                    }
 
-                        $q.when(reply).then(function (result) {
-                            postMessage({
-                                method: 'amp.reply',
-                                result: result,
-                                id: request.id
-                            });
+                    $q.when(reply).then(function (result) {
+                        postMessage({
+                            method: 'amp.response',
+                            result: result,
+                            id: request.id
+                        });
+                    }, function(errorMessage) {
+                        var error = ErrorObjects.REQUEST_ERROR;
+                        error.message = errorMessage;
+                        error.data.request = request;
+                        postMessage({
+                            error: error,
+                            method: 'amp.error',
+                            id: request.id
                         });
                     });
-                });
+                }
+
+                $rootScope.$digest();
             });
 
             var methods = {
@@ -131,7 +195,7 @@
                 },
                 bind: function (method, callback) {
                     if (checkIfAlreadyBound(method)) {
-                        console.error('Method: ' + method + ' can only be bound once.')
+                        console.error('Method: ' + method + ' can only be bound once.');
                         return;
                     }
                     subscriptions.push({
@@ -165,10 +229,10 @@
 
                 delete pendingPromises[res.id];
 
-                deferred.reject(res.error);
+                deferred.reject(res);
             });
 
-            methods.bind('amp.reply', function(res) {
+            methods.bind('amp.response', function(res) {
                 var deferred = pendingPromises[res.id];
 
                 if (! deferred) {
@@ -177,7 +241,7 @@
 
                 delete pendingPromises[res.id];
 
-                deferred.resolve(res.result);
+                deferred.resolve(res);
             });
 
             // If inside an iframe, automatically set the targetWindow
