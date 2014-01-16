@@ -42,6 +42,7 @@
             subscriptions = [],
             pendingPromises = {},
             currentId = 1,
+            internalMethods = ['rpc.error', 'rpc.response'],
             postMessage = function (message) {
                 message['jsonrpc'] = jsonrpcVersion;
                 message = angular.toJson(message);
@@ -81,6 +82,34 @@
                 }
 
                 return ret;
+            },
+            checkIfRequestIsValid = function(request) {
+                // Request MUST be an object
+                if (typeof request !== 'object') {
+                    return false;    
+                }
+
+                // jsonrpc MUST be defined
+                if (typeof request.jsonrpc === 'undefined') {
+                    return false;
+                }
+
+                // jsonrpc MUST equal the current JSON-RPC version
+                if (request.jsonrpc !== jsonrpcVersion) {
+                    return false;
+                }
+
+                // method MUST be a string
+                if (typeof request.method !== 'string') {
+                    return false;
+                }
+
+                // method CANNOT start with 'rpc.' if not internal
+                if (request.method.substr(0, 4) === 'rpc.' && internalMethods.indexOf(request.method) === -1) {
+                    return false;
+                }
+                
+                return true;
             };
 
         this.setTargetOrigin = function (_targetOrigin) {
@@ -116,9 +145,38 @@
                     return;
                 }
 
-                var requestString = event.data.substr(scope.length + (scope ? 1 : 0)),
-                    request = angular.fromJson(requestString),
-                    subs = getSubsToCall(request.method),
+                try {
+                    var requestString = event.data.substr(scope.length + (scope ? 1 : 0)),
+                        request = angular.fromJson(requestString);
+                } catch (e) {
+                    if (e.name === 'SyntaxError') {
+                        var parseError = ErrorObjects.PARSE_ERROR;
+                        parseError.data.requestString = event.data;
+                        postMessage({
+                            error: parseError,
+                            method: 'rpc.error',
+                            id: null
+                        });
+                    }
+
+                    return;
+                }
+
+
+                if (! checkIfRequestIsValid(request)) {
+                    var invalidRequest = ErrorObjects.INVALID_REQUEST;
+                    invalidRequest.data.request = request;
+
+                    postMessage({
+                        error: invalidRequest,
+                        method: 'rpc.error',
+                        id: request.id
+                    });
+
+                    return;
+                }
+
+                var subs = getSubsToCall(request.method),
                     subsIndex = -1,
                     subsCount = subs.length;
 
@@ -127,14 +185,16 @@
                  * it means we should send back a "Method not found" error response
                  */
                 if (subsCount === 0 && typeof request.id !== 'undefined') {
-                    var error = ErrorObjects.METHOD_NOT_FOUND;
-                    error.data.request = request;
+                    var methodNotFound = ErrorObjects.METHOD_NOT_FOUND;
+                    methodNotFound.data.request = request;
 
                     postMessage({
-                        error: error,
-                        method: 'amp.error',
+                        error: methodNotFound,
+                        method: 'rpc.error',
                         id: request.id
                     });
+
+                    return;
                 }
 
                 while (++subsIndex < subsCount) {
@@ -143,12 +203,13 @@
 
                     /**
                      * Check to see if we need to post a response/error message
+                     * 1) If request.id is undefined, it's a notification
+                     * 2) If it's an internal method, this prevents a never ending response loop
+                     * 3) If the sub is not atomic, it's just a listener
                      */
-                    // @TODO - Figure out a better way to do this...icky!
                     if (
                         typeof request.id === 'undefined' ||
-                        request.method === 'amp.response' ||
-                        request.method === 'amp.error' ||
+                        internalMethods.indexOf(request.method) !== -1 ||
                         ! sub.atomic
                     ) {
                         continue;
@@ -156,7 +217,7 @@
 
                     $q.when(reply).then(function (result) {
                         postMessage({
-                            method: 'amp.response',
+                            method: 'rpc.response',
                             result: result,
                             id: request.id
                         });
@@ -166,7 +227,7 @@
                         error.data.request = request;
                         postMessage({
                             error: error,
-                            method: 'amp.error',
+                            method: 'rpc.error',
                             id: request.id
                         });
                     });
@@ -220,7 +281,7 @@
                 }
             };
 
-            methods.bind('amp.error', function(res) {
+            methods.bind('rpc.error', function(res) {
                 var deferred = pendingPromises[res.id];
 
                 if (! deferred) {
@@ -232,7 +293,7 @@
                 deferred.reject(res);
             });
 
-            methods.bind('amp.response', function(res) {
+            methods.bind('rpc.response', function(res) {
                 var deferred = pendingPromises[res.id];
 
                 if (! deferred) {
