@@ -15,23 +15,21 @@ app.controller('AppCtrl', function($amp, $q) {
         Ctrl.hello = req.params.message;
     });
 
-    $amp.listen('hi', function(req) {
-        console.log(req);
-    });
-
     $amp.bind('getData', function(req) {
         return req.params.count + 1;
     });
 
+    // This should fail because it binds to the same method twice
     $amp.bind('getData', function(req) {
         return [1];
     });
 
-    $amp.bind('triggerReject', function(req) {
-        return $q.reject('Nope!');
+    // This should be okay because it just listens
+    $amp.listen('getData', function(req) {
+        console.log('Parent listening to getData:', req);
     });
 
-    $amp.listen('getData', function(req) {
-        console.log(req);
+    $amp.bind('triggerReject', function(req) {
+        return $q.reject('Nope!');
     });
 });

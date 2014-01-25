@@ -162,7 +162,6 @@
                     return;
                 }
 
-
                 if (! checkIfRequestIsValid(request)) {
                     var invalidRequest = ErrorObjects.INVALID_REQUEST;
                     invalidRequest.data.request = request;
@@ -238,6 +237,11 @@
 
             var methods = {
                 call: function (method, params) {
+                    if (method.substr(0, 4) === 'rpc.') {
+                        console.error('$amp.call() is not allowed on methods that begin with rpc.');
+                        return false;
+                    }
+
                     var deferred = $q.defer(),
                         message = {
                             method: method,
@@ -249,16 +253,28 @@
 
                     postMessage(message);
 
+                    $rootScope.$broadcast('$ampCallStart', message);
+
                     return deferred.promise;
                 },
                 notify: function (method, params) {
-                    postMessage({method: method, params: params});
+                    if (method.substr(0, 4) === 'rpc.') {
+                        console.error('$amp.notify() is not allowed on methods that begin with rpc.');
+                        return;
+                    }
+
+                    var message = {method: method, params: params}
+
+                    postMessage(message);
+
+                    $rootScope.$broadcast('$ampNotify', message);
                 },
                 bind: function (method, callback) {
                     if (checkIfAlreadyBound(method)) {
                         console.error('Method: ' + method + ' can only be bound once.');
                         return;
                     }
+
                     subscriptions.push({
                         method: method,
                         callback: callback,
@@ -266,6 +282,11 @@
                     });
                 },
                 listen: function (method, callback) {
+                    if (method.substr(0, 4) === 'rpc.') {
+                        console.error('$amp.listen() is not allowed on methods that begin with rpc.');
+                        return;
+                    }
+
                     subscriptions.push({
                         method: method,
                         callback: callback,
@@ -290,6 +311,8 @@
 
                 delete pendingPromises[res.id];
 
+                $rootScope.$broadcast('$ampResponseError', res);
+
                 deferred.reject(res);
             });
 
@@ -301,6 +324,8 @@
                 }
 
                 delete pendingPromises[res.id];
+
+                $rootScope.$broadcast('$ampResponseSuccess', res);
 
                 deferred.resolve(res);
             });
@@ -317,7 +342,7 @@
     module.directive('ampTarget', function ($amp) {
         return {
             restrict: 'A',
-            link: function postLink(scope, elem, attr) {
+            link: function postLink(scope, elem) {
                 $amp.setTargetWindow(elem[0]);
             }
         }
