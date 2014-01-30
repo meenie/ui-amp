@@ -20,22 +20,22 @@ app.controller('AppCtrl', function($amp, $scope) {
             Ctrl.data.push(res.result);
         });
 
-        $amp.call('triggerReject').then(function() {}, function(error) {
+        /*$amp.call('triggerReject').then(function() {}, function(error) {
             console.log('User rejected promise:', error);
-        });
+        });*/
     };
 
-    $amp.call('noMethod', {hmm: 'cool'}).then(function() {}, function(error) {
+    /*$amp.call('noMethod', {hmm: 'cool'}).then(function() {}, function(error) {
         console.log('No Method, $amp rejected promise:', error);
-    });
+    });*/
 
     // This picks up any response errors
     $scope.$on('$ampResponseError', function(event, resp) {
-        console.log('$ampResponseError:', resp);
+        //console.log('$ampResponseError:', resp);
     });
 
     // This picks up any response successes
     $scope.$on('$ampResponseSuccess', function(event, resp) {
-        console.log('$ampResponseSuccess:', resp);
+        //console.log('$ampResponseSuccess:', resp);
     });
 });

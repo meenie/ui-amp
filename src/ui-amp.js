@@ -69,14 +69,33 @@
 
                 return false;
             },
-            getSubsToCall = function(method) {
+            getSubToCall = function(method) {
+                if (internalMethods.indexOf(method) !== -1) {
+                    console.log(method);
+                    return false;
+                }
+
+                var index = -1,
+                    length = subscriptions.length;
+
+                while (++index < length) {
+                    var sub = subscriptions[index];
+
+                    if (sub.method === method && sub.atomic) {
+                        return sub;
+                    }
+                }
+
+                return false;
+            },
+            getSubsToNotify = function(method) {
                 var index = -1,
                     length = subscriptions.length,
                     ret = [];
 
                 while (++index < length) {
                     var sub = subscriptions[index];
-                    if (sub.method === method) {
+                    if (sub.method === method && ! sub.atomic) {
                         ret.push(sub);
                     }
                 }
@@ -129,29 +148,89 @@
         };
 
         this.$get = function ($rootScope, $window, $q, ErrorObjects) {
-            $window.addEventListener('message', function (event) {
+            var handleRequest = function(request) {
+                if (! checkIfRequestIsValid(request)) {
+                    var invalidRequest = ErrorObjects.INVALID_REQUEST;
+                    invalidRequest.data.request = request;
+
+                    return {
+                        error: invalidRequest,
+                        method: 'rpc.error',
+                        id: request.id
+                    }
+                }
+
+                var subToCall = getSubToCall(request.method),
+                    subsToNotify = getSubsToNotify(request.method),
+                    subsIndex = -1,
+                    subsCount = subsToNotify.length;
+
+                /**
+                 * If no subs were found and the request has an ID,
+                 * it means we should send back a "Method not found" error response
+                 */
+                if (subsCount === 0 && ! subToCall && typeof request.id !== 'undefined') {
+                    var methodNotFound = ErrorObjects.METHOD_NOT_FOUND;
+                    methodNotFound.data.request = request;
+
+                    return  {
+                        error: methodNotFound,
+                        method: 'rpc.error',
+                        id: request.id
+                    };
+                }
+
+                while (++subsIndex < subsCount) {
+                    var sub = subsToNotify[subsIndex];
+                    sub.callback(request);
+                }
+
+                if (subToCall) {
+                    return $q.when(subToCall.callback(request)).then(function (result) {
+                        return {
+                            method: 'rpc.response',
+                            result: result,
+                            id: request.id
+                        };
+                    }, function(errorMessage) {
+                        var error = ErrorObjects.REQUEST_ERROR;
+                        error.message = errorMessage;
+                        error.data.request = request;
+
+                        return {
+                            error: error,
+                            method: 'rpc.error',
+                            id: request.id
+                        };
+                    });
+                }
+
+                return false;
+            };
+
+            $window.addEventListener('message', function (message) {
                 // If allowedOrigins is specified, check to make sure it's legit
-                if (allowedOrigins.length > 0 && allowedOrigins.indexOf(event.origin) === -1) {
+                if (allowedOrigins.length > 0 && allowedOrigins.indexOf(message.origin) === -1) {
                     return;
                 }
 
                 // We are only concerned about messages that are strings
-                if (typeof event.data !== 'string') {
+                if (typeof message.data !== 'string') {
                     return;
                 }
 
                 // Only want to listen to messages that are within scope
-                if (event.data.substr(0, scope.length) !== scope) {
+                if (message.data.substr(0, scope.length) !== scope) {
                     return;
                 }
 
                 try {
-                    var requestString = event.data.substr(scope.length + (scope ? 1 : 0)),
+                    var requestString = message.data.substr(scope.length + (scope ? 1 : 0)),
                         request = angular.fromJson(requestString);
                 } catch (e) {
                     if (e.name === 'SyntaxError') {
                         var parseError = ErrorObjects.PARSE_ERROR;
-                        parseError.data.requestString = event.data;
+                        parseError.data.requestString = message.data;
                         postMessage({
                             error: parseError,
                             method: 'rpc.error',
@@ -162,73 +241,35 @@
                     return;
                 }
 
-                if (! checkIfRequestIsValid(request)) {
-                    var invalidRequest = ErrorObjects.INVALID_REQUEST;
-                    invalidRequest.data.request = request;
-
-                    postMessage({
-                        error: invalidRequest,
-                        method: 'rpc.error',
-                        id: request.id
-                    });
-
-                    return;
-                }
-
-                var subs = getSubsToCall(request.method),
-                    subsIndex = -1,
-                    subsCount = subs.length;
-
-                /**
-                 * If no subs were found and the request has an ID,
-                 * it means we should send back a "Method not found" error response
-                 */
-                if (subsCount === 0 && typeof request.id !== 'undefined') {
-                    var methodNotFound = ErrorObjects.METHOD_NOT_FOUND;
-                    methodNotFound.data.request = request;
-
-                    postMessage({
-                        error: methodNotFound,
-                        method: 'rpc.error',
-                        id: request.id
-                    });
-
-                    return;
-                }
-
-                while (++subsIndex < subsCount) {
-                    var sub = subs[subsIndex],
-                        reply = sub.callback(request);
-
-                    /**
-                     * Check to see if we need to post a response/error message
-                     * 1) If request.id is undefined, it's a notification
-                     * 2) If it's an internal method, this prevents a never ending response loop
-                     * 3) If the sub is not atomic, it's just a listener
-                     */
-                    if (
-                        typeof request.id === 'undefined' ||
-                        internalMethods.indexOf(request.method) !== -1 ||
-                        ! sub.atomic
-                    ) {
-                        continue;
-                    }
-
-                    $q.when(reply).then(function (result) {
+                if (Array.isArray(request)) {
+                    if (request.length === 0) {
+                        // If it's an empty array, return an invalidRequest rpc.error
                         postMessage({
-                            method: 'rpc.response',
-                            result: result,
-                            id: request.id
-                        });
-                    }, function(errorMessage) {
-                        var error = ErrorObjects.REQUEST_ERROR;
-                        error.message = errorMessage;
-                        error.data.request = request;
-                        postMessage({
-                            error: error,
+                            error: ErrorObjects.INVALID_REQUEST,
                             method: 'rpc.error',
-                            id: request.id
+                            id: null
                         });
+                    } else {
+                        var index = -1,
+                            promises = [];
+                        while (++index < request.length) {
+                            var promise = handleRequest(request[index]);
+                            if (promise !== false) {
+                                promises.push(promise);
+                            }
+                        }
+
+                        $q.all(promises).then(function(result) {
+                            if (result.length > 0) {
+                                postMessage(promises);
+                            }
+                        });
+                    }
+                } else {
+                    $q.when(handleRequest(request)).then(function(result) {
+                        if (result !== false) {
+                            postMessage(result);
+                        }
                     });
                 }
 
@@ -239,6 +280,7 @@
                 call: function (method, params) {
                     if (method.substr(0, 4) === 'rpc.') {
                         console.error('$amp.call() is not allowed on methods that begin with rpc.');
+
                         return false;
                     }
 
@@ -272,6 +314,7 @@
                 bind: function (method, callback) {
                     if (checkIfAlreadyBound(method)) {
                         console.error('Method: ' + method + ' can only be bound once.');
+
                         return;
                     }
 
@@ -284,6 +327,7 @@
                 listen: function (method, callback) {
                     if (method.substr(0, 4) === 'rpc.') {
                         console.error('$amp.listen() is not allowed on methods that begin with rpc.');
+
                         return;
                     }
 
@@ -306,7 +350,7 @@
                 var deferred = pendingPromises[res.id];
 
                 if (! deferred) {
-                    throw new Error ('Something really went wrong, there are no pending promise...');
+                    throw new Error ('Something really went wrong, there are no pending promises...');
                 }
 
                 delete pendingPromises[res.id];
@@ -320,7 +364,7 @@
                 var deferred = pendingPromises[res.id];
 
                 if (! deferred) {
-                    throw new Error ('Something really went wrong, there are no pending promise...');
+                    throw new Error ('Something really went wrong, there are no pending promises...');
                 }
 
                 delete pendingPromises[res.id];

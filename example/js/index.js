@@ -15,7 +15,8 @@ app.controller('AppCtrl', function($amp, $q) {
         Ctrl.hello = req.params.message;
     });
 
-    $amp.bind('getData', function(req) {
+
+    /*$amp.bind('getData', function(req) {
         return req.params.count + 1;
     });
 
@@ -31,5 +32,5 @@ app.controller('AppCtrl', function($amp, $q) {
 
     $amp.bind('triggerReject', function(req) {
         return $q.reject('Nope!');
-    });
+    });*/
 });
